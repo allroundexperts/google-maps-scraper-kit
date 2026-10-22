@@ -430,6 +430,10 @@ def main():
                          "repeatable (socks5, socks5h, http, https; bare host:port = http; no login gets x:x@). "
                          "Overrides SCRAPER_PROXIES. Only proxies that load Google Maps are sent")
     ap.add_argument("--proxies-file", help="file with one proxy URL per line (# comments allowed)")
+    ap.add_argument("--zoom", type=int, default=15,
+                    help="map zoom the search starts at (default 15). At 15 a search centred on its own place "
+                         "lists only what fits the small map, often just 20; use 12 for a whole city. --grid sets its own")
+    ap.add_argument("--radius", type=int, default=10000, help="search radius in meters (default 10000). --grid sets its own")
     ap.add_argument("--max-time", type=int, default=600, help="job time limit in SECONDS")
     ap.add_argument("--out", default=None, help="output file path (default: results-<id>.csv). "
                     "The extension picks the format: .csv (default) or .json")
@@ -501,8 +505,8 @@ def main():
             sys.exit(f"✗ None of the {n} proxies reached Google Maps. Fix the list, or drop --proxies/"
                      "--proxies-file (and unset SCRAPER_PROXIES) to scrape from your own IP.")
 
-    body = {"name": "scrape-py", "keywords": keywords, "lang": "en", "zoom": 15,
-            "lat": str(lat), "lon": str(lon), "fast_mode": False, "radius": 10000,
+    body = {"name": "scrape-py", "keywords": keywords, "lang": "en", "zoom": a.zoom,
+            "lat": str(lat), "lon": str(lon), "fast_mode": False, "radius": a.radius,
             "depth": a.depth, "email": a.email, "max_time": a.max_time}
     if proxies:
         body["proxies"] = proxies
