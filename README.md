@@ -237,9 +237,20 @@ your IP **temporarily rate-limited** (minutes to hours). Your Google account is 
 - Run one job at a time. Start at `depth 5` and raise only when needed.
 - Watch for block signals: `failed` jobs, empty results, or far fewer rows than an identical earlier run.
 - Add proxies for large or repeated runs. The engine rotates them automatically:
-  ```json
-  "proxies": ["socks5://user:pass@host:port", "http://host2:port2"]
+  ```bash
+  # A list: comma- or space-separated, or a JSON-style array. Repeat --proxies to add more.
+  python3 scripts/scrape.py "dentists in Austin TX" --city "Austin, TX" \
+    --proxies '["socks5://user:pass@host:port", "http://host2:port2"]'
+  # A file with one proxy per line (# comments allowed), alone or together with --proxies:
+  ./scripts/scrape.sh "dentists in Austin TX" 30.2672 -97.7431 5 --proxies-file proxies.txt
+  # Or once for every run, in .env:  SCRAPER_PROXIES=socks5://user:pass@host:port,http://host2:port2
   ```
+  Both scripts and `/scrape-batch` take these flags. Before the job starts, each proxy is test-fetched
+  through Google Maps (this needs `curl`), and only the ones that work are sent to the engine. Dead or
+  Google-blocked proxies are listed and dropped. If none work, the run stops instead of falling back to
+  your own IP. A bare `host:port` counts as `http://`. Proxies running on your own machine must be given
+  as `host.docker.internal`, not `localhost`, because the engine runs in Docker. `proxies.txt` is
+  git-ignored. Raw API calls take the list as `"proxies": [...]` in the job body, unchecked.
 - Treat output as leads to verify, not a dataset to resell. Phones and emails are personal data:
   follow GDPR, CCPA and CAN-SPAM.
 

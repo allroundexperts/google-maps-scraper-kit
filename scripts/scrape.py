@@ -18,15 +18,26 @@ Whole city past Google's ~120 results per search (3 x 3 map tiles, run one at a 
 Skip the deep email pass over contact and about pages (on by default whenever emails are on):
     python3 scripts/scrape.py "gyms in Miami FL" --city "Miami, FL" --no-deep-emails
 
+Route the engine through proxies it rotates. Each one is test-fetched through Google Maps first and
+only the working ones are sent. Pass a list (comma- or space-separated, or a JSON-style array), a file
+with one per line, or both:
+    python3 scripts/scrape.py "gyms in Miami FL" --city "Miami, FL" --proxies "socks5://user:pass@host:1080,http://host2:8080"
+    python3 scripts/scrape.py "gyms in Miami FL" --city "Miami, FL" --proxies '["socks5://host:1080", "host2:8080"]'
+    python3 scripts/scrape.py "gyms in Miami FL" --city "Miami, FL" --proxies-file proxies.txt
+
 Notes:
 - Required by the API: keywords, lat/lon (strings), max_time (SECONDS). This script fills them in.
+- Proxies can also be set once as SCRAPER_PROXIES in .env (comma-separated). --proxies or
+  --proxies-file replace it for that run. A bare host:port means http://. The check needs curl
+  (it speaks SOCKS; urllib does not); without curl the proxies are sent unchecked. Proxies carry
+  the engine's Google Maps traffic only, not geocoding or this script's website fetches.
 - Geocoding uses OpenStreetMap Nominatim (free, no key). It allows ~1 request/sec and requires a
   descriptive User-Agent (set below). Do not loop it aggressively.
 """
-import argparse, csv, functools, io, json, math, os, re, sys, time, urllib.request, urllib.parse, urllib.error
+import argparse, csv, functools, io, json, math, os, re, shutil, subprocess, sys, time, urllib.request, urllib.parse, urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
-ENV_KEYS = ("SCRAPER_BASE_URL", "SCRAPER_PORT", "SCRAPER_API_KEY")
+ENV_KEYS = ("SCRAPER_BASE_URL", "SCRAPER_PORT", "SCRAPER_API_KEY", "SCRAPER_PROXIES")
 
 
 def load_env_file():
@@ -168,6 +179,93 @@ def collect_keywords(a):
         if k not in seen:
             seen.add(k); out.append(k)
     return out
+
+
+PROXY_SCHEMES = ("socks5", "socks5h", "http", "https")
+
+
+def collect_proxies(a):
+    """--proxies (repeatable) and --proxies-file win over SCRAPER_PROXIES from the environment or .env."""
+    raw = []
+    for v in a.proxies or []:
+        raw.extend(split_proxy_list(v))
+    if a.proxies_file:
+        with open(a.proxies_file) as f:
+            raw.extend(line for line in f if not line.lstrip().startswith("#"))
+    if not raw:
+        raw = split_proxy_list(os.environ.get("SCRAPER_PROXIES", ""))
+    out = []
+    for p in (p.strip() for p in raw):
+        if not p:
+            continue
+        if "://" not in p:
+            p = "http://" + p
+        if p in out:
+            continue
+        scheme = urllib.parse.urlsplit(p).scheme.lower()
+        if scheme not in PROXY_SCHEMES:
+            raise ValueError(f"proxy {mask_proxy(p)!r} needs a scheme: {', '.join(s + '://' for s in PROXY_SCHEMES)}")
+        out.append(p)
+    return out
+
+
+def split_proxy_list(v):
+    """'a,b', 'a b' and '["a", "b"]' all give [a, b]."""
+    return [p.strip("'\"") for p in re.split(r"[,\s]+", v.strip().strip("[]")) if p.strip("'\"")]
+
+
+def proxy_verdict(w):
+    """Reads curl's '%{http_code} %{http_connect} %{redirect_url}'. None means the proxy works.
+    Same verdicts as check_proxy in scrape.sh."""
+    code, connect, redirect = (w.split(" ", 2) + ["", ""])[:3]
+    if "/sorry/" in redirect or code == "429":
+        return "blocked by Google"
+    if code[:1] in ("2", "3"):
+        return None
+    if code in ("", "000") and connect in ("", "000", "200"):
+        return "unreachable or timed out"
+    if code == "000":
+        return f"proxy refused (HTTP {connect})"
+    return f"HTTP {code}"
+
+
+def check_proxy(p):
+    try:
+        w = subprocess.run(["curl", "-s", "-o", os.devnull, "-w", "%{http_code} %{http_connect} %{redirect_url}",
+                            "-x", p, "--connect-timeout", "5", "-m", "12", "https://www.google.com/maps"],
+                           capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        w = ""
+    return proxy_verdict(w)
+
+
+def filter_proxies(proxies, workers=20):
+    """Keep the proxies Google Maps loads through, in their original order."""
+    if not shutil.which("curl"):
+        print("⚠️  curl not found, so the proxies can't be checked. Sending all of them unchecked.")
+        return proxies
+    print(f"▶ Checking {len(proxies)} proxies against Google Maps ({workers} at a time, up to 12s each)…")
+    with ThreadPoolExecutor(workers) as ex:
+        verdicts = list(ex.map(check_proxy, proxies))
+    for p, why in zip(proxies, verdicts):
+        if why:
+            print(f"  ✗ {mask_proxy(p)}: {why}")
+    working = [p for p, why in zip(proxies, verdicts) if not why]
+    if working:
+        print(f"  ✓ {len(working)} of {len(proxies)} working — the engine will rotate them")
+        if any(re.search(r"://([^@/]*@)?(localhost|127\.)", p) for p in working):
+            print("  ⚠️  localhost proxies pass this check but the Docker engine can't reach them;\n"
+                  "     use host.docker.internal in their place.")
+    return working
+
+
+def mask_proxy(p):
+    """Hide credentials before a proxy URL is printed."""
+    u = urllib.parse.urlsplit(p)
+    if u.username is None:
+        return p
+    host = u.hostname + (f":{u.port}" if u.port else "") if u.hostname else ""
+    return f"{u.scheme}://***@{host}"
 
 
 # ── Optional social enrichment (Instagram / Facebook / LinkedIn) ──────────────
@@ -313,6 +411,11 @@ def main():
     ap.add_argument("--grid", type=int, metavar="N",
                     help="split the --city area into N x N map tiles, one job each, deduped "
                          "(breaks Google's ~120 per search cap; max 10)")
+    ap.add_argument("--proxies", action="append", metavar="LIST",
+                    help="proxy URLs the engine rotates: comma- or space-separated, or a JSON-style array; "
+                         "repeatable (socks5, socks5h, http, https; user:pass@ allowed; bare host:port = http). "
+                         "Overrides SCRAPER_PROXIES. Only proxies that load Google Maps are sent")
+    ap.add_argument("--proxies-file", help="file with one proxy URL per line (# comments allowed)")
     ap.add_argument("--max-time", type=int, default=600, help="job time limit in SECONDS")
     ap.add_argument("--out", default=None, help="output file path (default: results-<id>.csv). "
                     "The extension picks the format: .csv (default) or .json")
@@ -326,6 +429,10 @@ def main():
     keywords = collect_keywords(a)
     if not keywords:
         sys.exit("✗ No keywords. Pass a keyword, --keyword, or --keywords-file.")
+    try:
+        proxies = collect_proxies(a)
+    except (OSError, ValueError) as e:
+        sys.exit(f"✗ Bad proxy setting: {e}")
 
     if a.grid is not None:
         if not a.city:
@@ -360,19 +467,32 @@ def main():
     # --- WARN, don't block: flag high-volume jobs (proceed anyway) ---
     if a.depth >= 15 or len(keywords) >= 10 or (a.grid or 1) ** 2 >= 4:
         print("⚠️  Heads-up: this is a large job (high depth, many keywords or a grid).")
-        print("    Running it back-to-back without proxies can get your IP temporarily rate-limited by")
-        print("    Google (clears in minutes–hours; returns empty/failed jobs meanwhile). For big or")
-        print("    repeated runs, add proxies. Proceeding…\n")
+        if proxies:
+            print("    Rotating proxies lowers the risk of Google rate-limiting you, but")
+            print("    a small pool can still get throttled (empty/failed jobs). Proceeding…\n")
+        else:
+            print("    Running it back-to-back without proxies can get your IP temporarily rate-limited by")
+            print("    Google (clears in minutes–hours; returns empty/failed jobs meanwhile). For big or")
+            print("    repeated runs, add proxies (--proxies or --proxies-file). Proceeding…\n")
 
     # Health check
     try:
         req("GET", "/api/v1/jobs")
     except Exception as e:
         sys.exit(f"✗ Scraper not reachable at {BASE} — run 'docker compose up -d' first.\n  ({e})")
+    if proxies:
+        n = len(proxies)
+        proxies = filter_proxies(proxies)
+        if not proxies:
+            sys.exit(f"✗ None of the {n} proxies reached Google Maps. Fix the list, or drop --proxies/"
+                     "--proxies-file (and unset SCRAPER_PROXIES) to scrape from your own IP.")
 
     body = {"name": "scrape-py", "keywords": keywords, "lang": "en", "zoom": 15,
             "lat": str(lat), "lon": str(lon), "fast_mode": False, "radius": 10000,
             "depth": a.depth, "email": a.email, "max_time": a.max_time}
+    if proxies:
+        body["proxies"] = proxies
+        print(f"▶ Rotating {len(proxies)} proxies: " + ", ".join(mask_proxy(p) for p in proxies))
     if not a.grid:
         print(f"▶ Creating job: {len(keywords)} keyword(s) @ {lat},{lon} depth={a.depth} email={a.email}")
         for k in keywords:

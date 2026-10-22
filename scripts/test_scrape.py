@@ -119,8 +119,63 @@ CELL_ROWS = {"job-1": [_row("A"), _row("B"), _row("C")],
              "job-4": [_row("A"), _row("E"), _row("F", lat="40.0")]}  # F is outside the city box
 
 
+class Proxies(unittest.TestCase):
+    def args(self, *proxies, proxies_file=None):
+        return mock.Mock(proxies=list(proxies) or None, proxies_file=proxies_file)
+
+    def test_flag_file_dedupe(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+            f.write("# pool\nhttp://h2:8080\n\nsocks5h://u:p@h3:1080\nh4:3128\n")
+        got = scrape.collect_proxies(self.args(" socks5://u:p@h1:1080 ,http://h2:8080", proxies_file=f.name))
+        self.assertEqual(got, ["socks5://u:p@h1:1080", "http://h2:8080", "socks5h://u:p@h3:1080", "http://h4:3128"])
+
+    def test_list_forms_and_repeat(self):
+        got = scrape.collect_proxies(self.args('["socks5://h1:1", "h2:2"]', "http://h3:3 https://h4:4", "h1:9"))
+        self.assertEqual(got, ["socks5://h1:1", "http://h2:2", "http://h3:3", "https://h4:4", "http://h1:9"])
+
+    def test_env_fallback_and_override(self):
+        with mock.patch.dict(os.environ, {"SCRAPER_PROXIES": "http://env:1"}):
+            self.assertEqual(scrape.collect_proxies(self.args()), ["http://env:1"])
+            self.assertEqual(scrape.collect_proxies(self.args("https://cli:2")), ["https://cli:2"])
+        with mock.patch.dict(os.environ, {"SCRAPER_PROXIES": ""}):
+            self.assertEqual(scrape.collect_proxies(self.args()), [])
+
+    def test_bad_scheme_masks_credentials(self):
+        with self.assertRaises(ValueError) as cm:
+            scrape.collect_proxies(self.args("ftp://user:secret@h:21"))
+        self.assertNotIn("secret", str(cm.exception))
+
+    def test_mask(self):
+        self.assertEqual(scrape.mask_proxy("socks5://u:p@h:1080"), "socks5://***@h:1080")
+        self.assertEqual(scrape.mask_proxy("http://h:8080"), "http://h:8080")
+
+    def test_verdicts(self):
+        v = scrape.proxy_verdict
+        self.assertIsNone(v("200 200 "))
+        self.assertIsNone(v("302 000 https://consent.google.com/"))
+        self.assertEqual(v("302 200 https://www.google.com/sorry/index"), "blocked by Google")
+        self.assertEqual(v("429 200 "), "blocked by Google")
+        self.assertEqual(v("000 000 "), "unreachable or timed out")
+        self.assertEqual(v(""), "unreachable or timed out")
+        self.assertEqual(v("000 407 "), "proxy refused (HTTP 407)")
+        self.assertEqual(v("503 200 "), "HTTP 503")
+
+    def test_filter_keeps_order_and_masks(self):
+        verdicts = {"http://a:1": None, "http://u:secret@b:2": "proxy refused (HTTP 407)", "http://c:3": None}
+        log = io.StringIO()
+        with mock.patch.object(scrape.shutil, "which", return_value="/usr/bin/curl"), \
+             mock.patch.object(scrape, "check_proxy", side_effect=verdicts.get), redirect_stdout(log):
+            self.assertEqual(scrape.filter_proxies(list(verdicts)), ["http://a:1", "http://c:3"])
+        self.assertIn("http://***@b:2: proxy refused (HTTP 407)", log.getvalue())
+        self.assertNotIn("secret", log.getvalue())
+
+    def test_no_curl_sends_unchecked(self):
+        with mock.patch.object(scrape.shutil, "which", return_value=None), redirect_stdout(io.StringIO()):
+            self.assertEqual(scrape.filter_proxies(["http://a:1"]), ["http://a:1"])
+
+
 class MockEngine(BaseHTTPRequestHandler):
-    created, polls = 0, {}
+    created, polls, bodies = 0, {}, []
 
     def log_message(self, *a):
         pass
@@ -134,7 +189,7 @@ class MockEngine(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
-        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        MockEngine.bodies.append(json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0)))))
         MockEngine.created += 1
         self._send(201, json.dumps({"id": f"job-{MockEngine.created}"}))
 
@@ -159,12 +214,14 @@ class EndToEnd(unittest.TestCase):
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         out = os.path.join(tempfile.mkdtemp(), "leads.csv")
         argv = ["scrape.py", "plumbers in Austin TX", "--city", "Austin, TX",
-                "--grid", "2", "--no-deep-emails", "--out", out]
+                "--grid", "2", "--no-deep-emails", "--out", out,
+                "--proxies", "socks5://u:secret@p1:1080,http://p2:8080"]
         log = io.StringIO()
         try:
             with mock.patch.object(scrape, "BASE", f"http://127.0.0.1:{srv.server_port}"), \
                  mock.patch.object(scrape, "geocode", return_value=("30.25", "-97.75", BBOX)), \
                  mock.patch.object(scrape.time, "sleep"), \
+                 mock.patch.object(scrape, "check_proxy", return_value=None), \
                  mock.patch.object(sys, "argv", argv), redirect_stdout(log):
                 scrape.main()
         finally:
@@ -173,6 +230,12 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("cell 4/4: 3 rows, 6 unique so far", text)
         self.assertIn("cell 3/4 skipped", text)
         self.assertIn("dropped 1 rows outside the city box", text)
+        self.assertIn("2 of 2 working", text)
+        self.assertIn("Rotating 2 proxies: socks5://***@p1:1080, http://p2:8080", text)
+        self.assertNotIn("secret", text)
+        self.assertEqual(len(MockEngine.bodies), 4)
+        for b in MockEngine.bodies:
+            self.assertEqual(b["proxies"], ["socks5://u:secret@p1:1080", "http://p2:8080"])
         with open(out, newline="") as f:
             rows = list(csv.reader(f))
         self.assertEqual(rows[0], scrape.LEAD)

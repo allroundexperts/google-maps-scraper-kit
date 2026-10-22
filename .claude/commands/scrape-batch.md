@@ -1,8 +1,8 @@
 ---
 description: Scrape many Google Maps keywords from a file in one job and return one lead CSV.
-argument-hint: <keywords-file> [--city "City, ST"]
+argument-hint: <keywords-file> [--city "City, ST"] [--proxies <list>] [--proxies-file <file>]
 ---
-The user wants a **batch** Google Maps scrape. Input: **$ARGUMENTS** (a keywords file, and optionally a city).
+The user wants a **batch** Google Maps scrape. Input: **$ARGUMENTS** (a keywords file, and optionally a city and proxies).
 
 Use the `google-maps-scraper` skill. The API scrapes **many keywords in ONE job** through the `keywords`
 array, so a batch is one job with all the terms.
@@ -14,6 +14,7 @@ array, so a batch is one job with all the terms.
    (Instagram / Facebook / LinkedIn) for these? Emails are already included. (yes / no)"*. If yes, add `--socials`.
 4. **Warn, don't block:** a batch with many keywords is high-volume. Print ONE short warning that it can
    get the IP temporarily rate-limited and suggest proxies for large or repeated runs, then **proceed**.
+   Skip the proxy suggestion if the user already gave proxies.
 5. POST a single job with the full `keywords` array, the required fields (`max_time` seconds, string `lat`/`lon`)
    and **`"email": true`** (emails are the key lead field). Use a generous `max_time` (e.g. `900`), because many
    keywords plus email extraction take longer. Poll in the background, then download.
@@ -21,3 +22,9 @@ array, so a batch is one job with all the terms.
 
 Tip: `scripts/scrape.py --keywords-file <file> --city "<City, ST>"` already does all of this, with emails on by
 default. Append `--socials` if the user said yes in step 3.
+
+**Proxies:** if the user gave a proxy list or file, pass it through unchanged: `--proxies '<list>'` (comma- or
+space-separated, or a JSON-style array; repeatable) and/or `--proxies-file <file>` (one proxy per line). The
+script test-fetches each one through Google Maps, sends only the working ones in the job body, and reports the
+dropped ones. Relay that count to the user. If it stops because none work, tell the user and do not rerun
+without proxies unless they ask. Proxies the user asked for in conversation but did not pass go the same way.

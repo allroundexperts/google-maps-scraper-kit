@@ -244,5 +244,6 @@ The skill holds the full rules. These are the essentials:
 - Start at `depth 5` and run one job at a time. Raise depth only when needed.
 - Keep email extraction on, the default, because emails are the key lead field. Use `--no-email` for a
   faster run without them.
-- Add proxies for big jobs. The engine rotates them for you.
+- Add proxies for big jobs with `--proxies <list>` or `--proxies-file proxies.txt` on either script.
+  Only proxies that load Google Maps are kept, and the engine rotates them for you.
 - Never commit result files. They are git-ignored for you.

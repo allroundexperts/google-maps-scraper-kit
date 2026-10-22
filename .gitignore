@@ -1,5 +1,6 @@
 # Secrets
 .env
+proxies.txt
 
 # Scrape outputs (may contain personal data — never commit)
 *.csv

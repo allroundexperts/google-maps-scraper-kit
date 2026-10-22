@@ -109,13 +109,21 @@ want socials too, unless they already said. If yes, **use the script:** `python3
   Say so if the user expects 100%.
 
 **Shortcuts. Prefer these for common cases:**
-- One keyword: `scripts/scrape.sh "<keyword>" <lat> <lon> [depth]` (bash) creates, polls and downloads in one go.
+- One keyword: `scripts/scrape.sh "<keyword>" <lat> <lon> [depth] [--proxies <list>] [--proxies-file <file>]` (bash) creates, polls and downloads in one go.
 - Auto-geocode (no coordinates): `python3 scripts/scrape.py "<keyword>" --city "<City, ST>" [--depth N]`
   resolves lat/lon via OpenStreetMap Nominatim. You can also geocode the city yourself and pass coordinates.
   **Emails come back by default** (`--no-email` skips them). Add `--socials` if the user asked for socials.
 - **Batch (many keywords, one job):** `python3 scripts/scrape.py --keywords-file <file> --city "<City, ST>"`.
   The API takes a `keywords` array, so put all terms in a single job rather than firing many jobs.
-Use the manual curl flow only for custom job bodies, e.g. to set `proxies`.
+- **Proxies:** both scripts take `--proxies <list>` and `--proxies-file <file>`, and fall back to
+  `SCRAPER_PROXIES` in `.env`. The list can be comma- or space-separated or a JSON-style array
+  (`--proxies '["socks5://user:pass@host:1080", "host2:8080"]'`); the file has one URL per line; both
+  can be combined. A bare `host:port` means `http://`. Before the job, each proxy is test-fetched through
+  Google Maps (needs `curl`) and **only the working ones are sent**; dead or Google-blocked ones are listed
+  and dropped. If none work, the script stops rather than scrape from the user's own IP. Every job gets
+  the filtered list, including each grid tile and every keyword in a batch. A `localhost` proxy passes
+  the check but the Docker engine can't reach it: tell the user to use `host.docker.internal`.
+Use the manual curl flow only for custom job bodies the script does not cover.
 
 **Whole-city runs:** when the user says all, every or entire city, or a run returns about 120 rows
 (Google's per-search cap), use `python3 scripts/scrape.py "<keyword>" --city "<City, ST>" --grid 3`.
@@ -157,7 +165,8 @@ There is **no published hard threshold** for blocks, so stay conservative:
 
 **When to add proxies** (upstream: *"For larger scraping jobs, proxies help avoid rate limiting"*):
 large jobs, many keywords, repeated or scheduled runs, or after you see block signals.
-- Set the `"proxies"` array in the job body. Types: `socks5`, `socks5h`, `http`, `https`.
+- With the scripts: `--proxies`, `--proxies-file` or `SCRAPER_PROXIES` in `.env` (see Shortcuts).
+  Raw API: set the `"proxies"` array in the job body. Types: `socks5`, `socks5h`, `http`, `https`.
 - Format: `protocol://user:pass@host:port` (auth optional), e.g.
   `"proxies": ["socks5://user:pass@host:port", "http://host2:port2"]`. The engine rotates them automatically.
 

@@ -1,6 +1,6 @@
 ---
 description: Scrape Google Maps business listings for one business type in one city and return the 8 lead fields as a table and CSV.
-argument-hint: <business type> in <city, ST> [depth]
+argument-hint: <business type> in <city, ST> [depth] [--proxies <list>] [--proxies-file <file>]
 ---
 The user wants a Google Maps lead list. Query: **$ARGUMENTS**
 
@@ -17,6 +17,8 @@ Use the `google-maps-scraper` skill and follow these steps:
 6. **Save a CSV file.** `scripts/scrape.py` writes `results-<id>.csv` by default. If you use the raw API, save the parsed lead fields to a `.csv` yourself. Then **present only the 8 lead fields** in a clean markdown table: `name (title), phone, emails, website, category, address, review_rating, review_count`, plus `instagram, facebook, linkedin` if socials were requested. **Drop everything else**, especially `latitude`/`longitude`, IDs, hours, images and review blobs. Never dump the full 34-column CSV into chat. Show a few sample rows and give the CSV path. Include dropped fields only if the user explicitly asks.
 
 **All, every or entire city:** add `--grid 3` (3 x 3 map tiles, one job at a time, deduped) to get past Google's ~120 results per search. Warn once that it is slower and more likely to trip rate limits, then proceed.
+
+**Proxies:** if the user gave proxies, append `--proxies '<list>'` (comma- or space-separated, or a JSON-style array) and/or `--proxies-file <file>` to `scripts/scrape.py`. Only proxies that load Google Maps are sent to the engine; tell the user how many were kept. If none work, the script stops: report that and do not rerun without proxies unless they ask.
 
 **Emails:** on by default. The engine visits each business website to find them, which is a little slower. Some businesses publish no email, so coverage is partial. For a deliberately fast run without emails, pass `--no-email`.
 
