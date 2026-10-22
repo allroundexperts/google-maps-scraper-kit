@@ -28,7 +28,8 @@ with one per line, or both:
 Notes:
 - Required by the API: keywords, lat/lon (strings), max_time (SECONDS). This script fills them in.
 - Proxies can also be set once as SCRAPER_PROXIES in .env (comma-separated). --proxies or
-  --proxies-file replace it for that run. A bare host:port means http://. The check needs curl
+  --proxies-file replace it for that run. A bare host:port means http://, and a proxy with no login
+  gets the placeholder x:x@ because the engine refuses proxies without one. The check needs curl
   (it speaks SOCKS; urllib does not); without curl the proxies are sent unchecked. Proxies carry
   the engine's Google Maps traffic only, not geocoding or this script's website fetches.
 - Geocoding uses OpenStreetMap Nominatim (free, no key). It allows ~1 request/sec and requires a
@@ -149,7 +150,8 @@ def run_job(body):
 
     print("▶ Polling…")
     status = None
-    for i in range(120):
+    # Wait as long as the engine may run the job (max_time seconds) plus 2 minutes, never under 16.
+    for i in range(max(120, body.get("max_time", 0) // 8 + 15)):
         _, raw = req("GET", f"/api/v1/jobs/{job_id}")
         status = json.loads(raw).get("Status")
         print(f"\r  status: {str(status):<10} (attempt {i + 1})", end="", flush=True)
@@ -182,6 +184,9 @@ def collect_keywords(a):
 
 
 PROXY_SCHEMES = ("socks5", "socks5h", "http", "https")
+# The engine (v1.18) refuses a proxy without a username and password ("failed to start auth proxy …
+# username and password are required"), so free proxies get this one. Open proxies ignore it.
+PLACEHOLDER_LOGIN = "x:x"
 
 
 def collect_proxies(a):
@@ -200,6 +205,7 @@ def collect_proxies(a):
             continue
         if "://" not in p:
             p = "http://" + p
+        p = with_login(p)
         if p in out:
             continue
         scheme = urllib.parse.urlsplit(p).scheme.lower()
@@ -257,6 +263,14 @@ def filter_proxies(proxies, workers=20):
             print("  ⚠️  localhost proxies pass this check but the Docker engine can't reach them;\n"
                   "     use host.docker.internal in their place.")
     return working
+
+
+def with_login(p):
+    """Give a proxy URL without credentials the placeholder login the engine needs."""
+    u = urllib.parse.urlsplit(p)
+    if u.username is not None:
+        return p
+    return urllib.parse.urlunsplit(u._replace(netloc=f"{PLACEHOLDER_LOGIN}@{u.netloc}"))
 
 
 def mask_proxy(p):
@@ -413,7 +427,7 @@ def main():
                          "(breaks Google's ~120 per search cap; max 10)")
     ap.add_argument("--proxies", action="append", metavar="LIST",
                     help="proxy URLs the engine rotates: comma- or space-separated, or a JSON-style array; "
-                         "repeatable (socks5, socks5h, http, https; user:pass@ allowed; bare host:port = http). "
+                         "repeatable (socks5, socks5h, http, https; bare host:port = http; no login gets x:x@). "
                          "Overrides SCRAPER_PROXIES. Only proxies that load Google Maps are sent")
     ap.add_argument("--proxies-file", help="file with one proxy URL per line (# comments allowed)")
     ap.add_argument("--max-time", type=int, default=600, help="job time limit in SECONDS")

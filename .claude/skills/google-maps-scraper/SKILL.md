@@ -118,7 +118,8 @@ want socials too, unless they already said. If yes, **use the script:** `python3
 - **Proxies:** both scripts take `--proxies <list>` and `--proxies-file <file>`, and fall back to
   `SCRAPER_PROXIES` in `.env`. The list can be comma- or space-separated or a JSON-style array
   (`--proxies '["socks5://user:pass@host:1080", "host2:8080"]'`); the file has one URL per line; both
-  can be combined. A bare `host:port` means `http://`. Before the job, each proxy is test-fetched through
+  can be combined. A bare `host:port` means `http://`. The engine refuses proxies without a username and
+  password, so the scripts give free proxies a placeholder `x:x@` login (open proxies ignore it). Before the job, each proxy is test-fetched through
   Google Maps (needs `curl`) and **only the working ones are sent**; dead or Google-blocked ones are listed
   and dropped. If none work, the script stops rather than scrape from the user's own IP. Every job gets
   the filtered list, including each grid tile and every keyword in a batch. A `localhost` proxy passes
@@ -146,7 +147,7 @@ contact and about pages checked, and the script prints the found rate. `--no-dee
   for a fast run.
 - **`fast_mode:true`** returns reduced data, up to ~21 results per query, faster. Use it for quick lookups.
 - **Proxies:** for large or repeated jobs, set `"proxies"` (an array of `socks5://`, `http://` or
-  `https://` URLs, auth supported). The engine rotates them. This is the main defense against rate limits.
+  `https://` URLs). The engine rotates them. This is the main defense against rate limits.
 - **`zoom` and `radius`** set the search area around `lat`/`lon`. Widen `radius` if results are too few.
 - **Extended reviews** are available but heavy. Enable them only if the user asks for review text.
 
@@ -167,7 +168,8 @@ There is **no published hard threshold** for blocks, so stay conservative:
 large jobs, many keywords, repeated or scheduled runs, or after you see block signals.
 - With the scripts: `--proxies`, `--proxies-file` or `SCRAPER_PROXIES` in `.env` (see Shortcuts).
   Raw API: set the `"proxies"` array in the job body. Types: `socks5`, `socks5h`, `http`, `https`.
-- Format: `protocol://user:pass@host:port` (auth optional), e.g.
+- Format: `protocol://user:pass@host:port`. **A login is required**: the engine fails a job whose proxy has
+  none, yet leaves it showing `working`. For a free proxy in a raw API call, write `http://x:x@host:port`. E.g.
   `"proxies": ["socks5://user:pass@host:port", "http://host2:port2"]`. The engine rotates them automatically.
 
 ## Safety and guardrails

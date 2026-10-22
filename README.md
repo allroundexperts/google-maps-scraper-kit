@@ -248,7 +248,8 @@ your IP **temporarily rate-limited** (minutes to hours). Your Google account is 
   Both scripts and `/scrape-batch` take these flags. Before the job starts, each proxy is test-fetched
   through Google Maps (this needs `curl`), and only the ones that work are sent to the engine. Dead or
   Google-blocked proxies are listed and dropped. If none work, the run stops instead of falling back to
-  your own IP. A bare `host:port` counts as `http://`. Proxies running on your own machine must be given
+  your own IP. A bare `host:port` counts as `http://`. The engine refuses proxies without a login, so free
+  proxies get a placeholder `x:x@` automatically; open proxies ignore it. Proxies running on your own machine must be given
   as `host.docker.internal`, not `localhost`, because the engine runs in Docker. `proxies.txt` is
   git-ignored. Raw API calls take the list as `"proxies": [...]` in the job body, unchecked.
 - Treat output as leads to verify, not a dataset to resell. Phones and emails are personal data:

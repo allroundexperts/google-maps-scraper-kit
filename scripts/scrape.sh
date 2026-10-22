@@ -8,6 +8,7 @@
 #   --proxies takes a comma- or space-separated list or a JSON-style array, and can be repeated.
 #   The file has one proxy per line (blank lines and # comments skipped). Both can be combined.
 #   Types: socks5://, socks5h://, http://, https:// (a bare host:port means http://), user:pass@ allowed.
+#   The engine refuses proxies without a login, so free proxies get the placeholder x:x@ automatically.
 #   With neither flag, SCRAPER_PROXIES from .env (comma-separated) is used. Each proxy is test-fetched
 #   through Google Maps first, and only the working ones are sent to the engine, which rotates them.
 set -euo pipefail
@@ -71,9 +72,11 @@ if [ -n "$PROXIES_FILE" ]; then
 $(cat "$PROXIES_FILE")"
 fi
 if [ -z "$PROXIES_ARG" ] && [ -z "$PROXIES_FILE" ]; then RAW_PROXIES=$(split_list "${SCRAPER_PROXIES:-}"); fi
-# Trim, drop blanks and comments, default a bare host:port to http://, de-dupe keeping order.
+# Trim, drop blanks and comments, default a bare host:port to http://, give a proxy with no login the
+# placeholder x:x@ (the engine refuses proxies without one; open proxies ignore it), de-dupe keeping order.
 CANDIDATES=$(printf '%s\n' "$RAW_PROXIES" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
-  | grep -v -e '^$' -e '^#' | sed -e '/:\/\//!s#^#http://#' | awk '!seen[$0]++' || true)
+  | grep -v -e '^$' -e '^#' | sed -e '/:\/\//!s#^#http://#' -e '/:\/\/[^\/]*@/!s#://#://x:x@#' \
+  | awk '!seen[$0]++' || true)
 
 mask() { printf '%s' "$1" | sed 's#://[^@/]*@#://***@#'; }  # hide user:pass before printing
 

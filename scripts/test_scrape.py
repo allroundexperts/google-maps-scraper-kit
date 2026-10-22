@@ -127,16 +127,25 @@ class Proxies(unittest.TestCase):
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
             f.write("# pool\nhttp://h2:8080\n\nsocks5h://u:p@h3:1080\nh4:3128\n")
         got = scrape.collect_proxies(self.args(" socks5://u:p@h1:1080 ,http://h2:8080", proxies_file=f.name))
-        self.assertEqual(got, ["socks5://u:p@h1:1080", "http://h2:8080", "socks5h://u:p@h3:1080", "http://h4:3128"])
+        self.assertEqual(got, ["socks5://u:p@h1:1080", "http://x:x@h2:8080", "socks5h://u:p@h3:1080",
+                               "http://x:x@h4:3128"])
 
     def test_list_forms_and_repeat(self):
         got = scrape.collect_proxies(self.args('["socks5://h1:1", "h2:2"]', "http://h3:3 https://h4:4", "h1:9"))
-        self.assertEqual(got, ["socks5://h1:1", "http://h2:2", "http://h3:3", "https://h4:4", "http://h1:9"])
+        self.assertEqual(got, ["socks5://x:x@h1:1", "http://x:x@h2:2", "http://x:x@h3:3", "https://x:x@h4:4",
+                               "http://x:x@h1:9"])
+
+    def test_placeholder_login(self):
+        self.assertEqual(scrape.with_login("http://1.2.3.4:8080"), "http://x:x@1.2.3.4:8080")
+        self.assertEqual(scrape.with_login("socks5://u:p@h:1"), "socks5://u:p@h:1")
+        # bare, explicit-scheme and already-filled forms of one proxy collapse to one entry
+        got = scrape.collect_proxies(self.args("1.2.3.4:80,http://1.2.3.4:80,http://x:x@1.2.3.4:80"))
+        self.assertEqual(got, ["http://x:x@1.2.3.4:80"])
 
     def test_env_fallback_and_override(self):
         with mock.patch.dict(os.environ, {"SCRAPER_PROXIES": "http://env:1"}):
-            self.assertEqual(scrape.collect_proxies(self.args()), ["http://env:1"])
-            self.assertEqual(scrape.collect_proxies(self.args("https://cli:2")), ["https://cli:2"])
+            self.assertEqual(scrape.collect_proxies(self.args()), ["http://x:x@env:1"])
+            self.assertEqual(scrape.collect_proxies(self.args("https://cli:2")), ["https://x:x@cli:2"])
         with mock.patch.dict(os.environ, {"SCRAPER_PROXIES": ""}):
             self.assertEqual(scrape.collect_proxies(self.args()), [])
 
@@ -172,6 +181,22 @@ class Proxies(unittest.TestCase):
     def test_no_curl_sends_unchecked(self):
         with mock.patch.object(scrape.shutil, "which", return_value=None), redirect_stdout(io.StringIO()):
             self.assertEqual(scrape.filter_proxies(["http://a:1"]), ["http://a:1"])
+
+
+class RunJobPolling(unittest.TestCase):
+    def polls_before_timeout(self, max_time):
+        calls = []
+        def fake_req(method, path, body=None):
+            calls.append(method)
+            return 200, b'{"id": "j1"}' if method == "POST" else b'{"Status": "working"}'
+        with mock.patch.object(scrape, "req", fake_req), mock.patch.object(scrape.time, "sleep"), \
+             redirect_stdout(io.StringIO()), self.assertRaises(RuntimeError):
+            scrape.run_job({"max_time": max_time})
+        return calls.count("GET")
+
+    def test_poll_budget_follows_max_time(self):
+        self.assertEqual(self.polls_before_timeout(600), 120)   # floor: 16 minutes
+        self.assertEqual(self.polls_before_timeout(1800), 240)  # 30 min job + 2 min grace
 
 
 class MockEngine(BaseHTTPRequestHandler):
@@ -231,11 +256,11 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("cell 3/4 skipped", text)
         self.assertIn("dropped 1 rows outside the city box", text)
         self.assertIn("2 of 2 working", text)
-        self.assertIn("Rotating 2 proxies: socks5://***@p1:1080, http://p2:8080", text)
+        self.assertIn("Rotating 2 proxies: socks5://***@p1:1080, http://***@p2:8080", text)
         self.assertNotIn("secret", text)
         self.assertEqual(len(MockEngine.bodies), 4)
         for b in MockEngine.bodies:
-            self.assertEqual(b["proxies"], ["socks5://u:secret@p1:1080", "http://p2:8080"])
+            self.assertEqual(b["proxies"], ["socks5://u:secret@p1:1080", "http://x:x@p2:8080"])
         with open(out, newline="") as f:
             rows = list(csv.reader(f))
         self.assertEqual(rows[0], scrape.LEAD)
